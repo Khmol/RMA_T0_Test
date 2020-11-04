@@ -1,4 +1,6 @@
 #coding: utf8
+
+
 import datetime
 import socket
 import socketserver
@@ -55,6 +57,8 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
         self.measureCounter = 0
         self.DQFCounter = 0
         self.FECCounter = 0
+        self.result = False
+        self.now = None
         self.minDistance = MIN_DISTANCE
         self.maxDistance = MAX_DISTANCE
         self.minDQF = MIN_DQF
@@ -217,6 +221,14 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
         '''
         self.rightAnswer = self.LoadTxPacketByMode('mode_3', '_answer_')
         ClearLabelStatus(self.ui)
+        for index in range(1,len(CUR_RTLS_LABEL)):
+            cmd = '{}.setText("{}{}")'.format(CUR_RTLS_LABEL[index], CUR_RTLS_LABEL_DEF_TEXT[index],
+                                              CUR_RTLS_LABEL_DEF_TEXT_END[index])
+            eval(cmd)
+            cmd = '{}.setText("{}{}")'.format(CUR_RTLS_LABEL_MIDDLE[index], CUR_RTLS_LABEL_DEF_TEXT_MIDDLE[index],
+                                              CUR_RTLS_LABEL_DEF_TEXT_END[index])
+            eval(cmd)
+        self.ui.label_ModeRTLS_Counter.setText('Количество измерений: 0')
         self.ClearTxCounters()
         self.ui.label_ModeRTLS.setText('Статус выполнения: Выполняется')
         if self.activeConnection == self.CUR_CONNECTION['TCP']:
@@ -826,15 +838,19 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
                                 and DQF >= self.minDQF \
                                 and FEC >= self.minFEC and FEC <= self.maxFEC:
                             QMessageBox(QMessageBox.Warning, 'Результат проверки.',
-                                        'Расстояние измеряется правильно. РМА-Т0 проверена', QMessageBox.Ok).exec()
+                                        'Расстояние измеряется правильно. РМА проверена', QMessageBox.Ok).exec()
+                            self.result = True
+                            self.ui.label_ModeRTLS.setText('Статус выполнения: Успешно')
                         else:
                             QMessageBox(QMessageBox.Warning, 'Результат проверки.',
-                                        'Расстояние измеряется с ошибкой. Нужно дополнительно проверить данную РМА-Т0.', QMessageBox.Ok).exec()
+                                        'Расстояние измеряется с ошибкой. Нужно дополнительно проверить данную РМА.', QMessageBox.Ok).exec()
+                            self.result = False
+                            self.ui.label_ModeRTLS.setText('Статус выполнения: Ошибка')
                         # больше не ждем приема ответа
                         self.ClearTxCounters()
                         # открываем файл для записи результатов измерения
-                        now = datetime.datetime.now()
-                        filename = '{}_{}_{}.txt'.format(now.day, now.month, now.year)
+                        self.now = datetime.datetime.now()
+                        filename = '{}_{}_{}.txt'.format(self.now.day, self.now.month, self.now.year)
                         self.file = open(filename, 'at')
                         if self.STATUS_NEW == self.CUR_STATUS['RS_RTLS']:
                             self.STATUS_NEW = self.CUR_STATUS['RS_FILE']
@@ -858,7 +874,7 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
 
         except Exception as EXP:
             out_str = str(EXP)
-            QMessageBox(QMessageBox.Warning, 'Ошибка.',out_str , QMessageBox.Ok).exec()
+            QMessageBox(QMessageBox.Warning, 'Ошибка.', out_str , QMessageBox.Ok).exec()
             # Закрытие порта и выключение записи - переход в исходное состояние
             self.STATUS_OLD = self.STATUS_NEW
             self.STATUS_NEW = self.ID2["IDLE"]
@@ -924,6 +940,7 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
         :return:
         '''
         if self.step == 0:
+            self.ui.label_ModeRTLS.setText('Статус выполнения: Выполняется')
             self.sumMiddleDist = 0.0
             self.sumMiddleDQF = 0.0
             self.sumMiddleFEC = 0.0
@@ -962,12 +979,12 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
                         # выводим данные от пакета 1
                         rmsNumber = data[1][-6:-4] + data[1][-8:-6]
                         value = rmsNumber
-                        # self.ui.label_NumberRMS.setText('Номер РМС: {}'.format(rmsNumber))
                         if int(rmsNumber, 16) != self.addressRMS:
                             # ведется обмен не с тем РМС, нужновыдать ошибку и прекратить обмен
                             QMessageBox(QMessageBox.Warning, 'Ошибка.',
                                         'Измеряется расстояние с ошибочным РМС, нужно его проверить.',
                                         QMessageBox.Ok).exec()
+                            self.ui.label_ModeRTLS.setText('Статус выполнения: Ошибка')
                             self.STATUS_NEW = self.CUR_STATUS['RS_RECIEVE']
                             # больше не ждем приема ответа
                             self.ClearTxCounters()
@@ -1041,23 +1058,29 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
                         if (data[1][ID_START_INDEX:ID_END_INDEX]) == ID_VERSION or \
                            (data[1][ID_START_INDEX:ID_END_INDEX]) == ID_DATA or \
                            (data[1][ID_START_INDEX:ID_END_INDEX]) == ID_TIME :
-                            text = Convert_HexStr_to_Str(data[1], DATA_START_INDEX, DATA_END_INDEX) + '\r'
+                            text = Convert_HexStr_to_Str(data[1], DATA_START_INDEX, DATA_END_INDEX) + '\n'
                             file.write(text)
-                        if (data[1][ID_START_INDEX:ID_END_INDEX]) == ID_TIME:
-                            text = self.ParseID(data[1], DATA_START_INDEX, DATA_END_INDEX)
+                        if (data[1][ID_START_INDEX:ID_END_INDEX]) == ID_ID:
+                            text = self.ParseID(data[1], DATA_START_INDEX, DATA_END_INDEX) + '\n'
                             file.write(text)
                         if not self.SendStageData(mode, self.step, TX_TIMER):
                             # записываем все ранее измеренные значения
-                            if self.measureCounter:
-                                middleDist = 0.0 + self.sumMiddleDist / self.measureCounter
-                                file.write(str('     Dist: {:.6}\r'.format(middleDist)))
-                            # TODO проверить деление на 0 и ID конвертнуть правильно
                             if self.FECCounter:
                                 middleFEC = 0.0 + self.sumMiddleFEC / self.FECCounter
-                                file.write(str('     FEC: {:.6}\r'.format(middleFEC)))
+                                file.write(str('     FEC: {:.6} границы от {} до {}\n'.format(middleFEC, self.minFEC, self.maxFEC)))
                             if self.DQFCounter:
                                 middleDQF = 0.0 + self.sumMiddleDQF / self.DQFCounter
-                                file.write(str('     DQF: {:.6}\r'.format(middleDQF)))
+                                file.write(str('     DQF: {:.6} граница от {}\n'.format(middleDQF, self.minDQF)))
+                            if self.measureCounter:
+                                middleDist = 0.0 + self.sumMiddleDist / self.measureCounter
+                                file.write(str('     Dist: {:.6} границы от {} до {}\n'.format(middleDist, self.minDistance, self.maxDistance)))
+                                file.write(str('     Количество измерений: {}\n'.format(self.measureCounter)))
+                                if self.result:
+                                    file.write(str('     Результат проверки РМА в {}:{}: Успешно\n\n'.format(self.now.hour, self.now.minute)))
+                                    self.result = False
+                                else:
+                                    file.write(str('     Результат проверки РМА в {}:{}: Ошибка\n\n'.format(self.now.hour, self.now.minute)))
+
                             # больше не ждем приема ответа
                             self.ClearTxCounters()
                             return False
@@ -1127,7 +1150,6 @@ class RMA_T0_Test(QtWidgets.QMainWindow):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     myapp = RMA_T0_Test()
-    # myapp.setWindowFlags(QtCore.Qt.WindowMinMaxButtonsHint | QtCore.Qt.WindowCloseButtonHint  )
     myapp.show()
     sys.exit(app.exec_())
 
